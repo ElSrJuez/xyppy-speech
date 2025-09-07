@@ -1,0 +1,2 @@
+POLL_MS = 30
+TRANSCRIPT_FONT = ("Consolas", 11)

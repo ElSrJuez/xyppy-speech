@@ -2,3 +2,4 @@
 *.sav
 build/
 xyppy.egg-info/
+*.z5
