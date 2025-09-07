@@ -40,6 +40,66 @@ Provide a thin GUI wrapper around the existing **xyppy** CLI engine so that the 
 • **engine_thread.py** – Boots the game, replaces `sys.stdin/out` with Pipe objects, runs forever.
 • **app.py** – Tkinter `Tk` subclass that owns widgets and a 30 ms polling loop.
 
+## 4.1 Threading, Concurrency & Fault-Tolerance
+The application always has **exactly two Python threads**:
+
+| Thread | Responsibilities | Must **never** do |
+|--------|------------------|--------------------|
+| **GUI (MainThread)** | • Owns all Tk widgets.  
+• Polls `from_engine` queue every *POLL_MS* ms.  
+• Sends user keystrokes & voice-craft commands to `to_engine`. | Call functions that block > 10 ms or touch `env.mem`. |
+| **EngineThread** | • Runs `xyppy.__main__.run()` unchanged.  
+• Reads from `sys.stdin` (wired to `to_engine`).  
+• Writes to `sys.stdout` (wired to `from_engine`). | Make any Tk calls or hold GIL while sleeping. |
+
+### Bridge Objects
+* **`pipe.Pipe`** – A subclass of `queue.Queue` + `io.TextIOBase` so that the interpreter believes it is dealing with real files.
+* **`InputQueue`** – Extends `queue.PriorityQueue`; shared by keyboard & speech modules (see *input_abstract.md*).
+* **`OutputQueue`** – Plain `queue.Queue`; stores raw ANSI bytes.
+
+Both queues are **bounded** (`maxsize=2048`) to prevent unbounded memory growth.  When full, the engine thread blocks (back-pressure) and the GUI shows a soft warning.
+
+### Deadlocks & Lifetime
+1. **Startup** –  GUI builds queues, starts EngineThread *(daemon=True)*, then enters `mainloop()`.
+2. **Normal operation** –  Engine blocks on `InputQueue.get()`; GUI unblocks it by enqueuing lines.
+3. **Quit handling**  –  If the game executes `quit`, EngineThread exits and closes the output queue with a sentinel `None`.  The GUI detects the sentinel and calls `self.destroy()`.
+4. **Force-quit** (GUI window close) – GUI enqueues `quit\n` with high priority then waits up to 1 s for thread join; if still alive uses `threading.interrupt_main()` as last resort.
+
+### Exception Flow
+* Exceptions in **EngineThread** are caught, formatted and pushed to `OutputQueue` with a `[[ERROR]]` tag so they appear in transcript.
+* Exceptions in **GUI thread** bubble up to Tk’s handler; we additionally log to *stderr* and attempt graceful shutdown.
+
+### GIL Considerations
+The Z-machine interpreter is CPU-bound but seldom blocks I/O; running it in a separate thread frees the main thread for 60 fps UI refresh even on modest hardware.  No C-extensions that release the GIL are used, so contention is minimal.
+
+### Race-Free Data Access
+GUI state panels (object explorer, speech) call the **read-only** helpers from *state_helper.md*.  Each helper copies slices of `env.mem` into local Python objects *within the EngineThread* via a `call_in_engine(fn)` utility which uses a `Queue` + `Event` to synchronously execute the function inside the interpreter thread, guaranteeing consistency without locks.
+
+```
+# engine_thread.py
+_work_queue: Queue[Callable]
+
+def engine_loop():
+    while True:
+        try:
+            task = _work_queue.get_nowait()
+            result = task()
+            _result_queue.put(result)
+        except queue.Empty:
+            step(env)  # normal VM step
+```
+
+GUI performs:
+```
+_result_queue = Queue()
+_work_queue.put(lambda: get_current_room(env))
+result = _result_queue.get()
+```
+Only short, non-blocking lambdas are permitted; long enumeration (e.g., entire dictionary dump) must be chunked.
+
+### Avoiding Tk From Worker Thread
+Any attempt to update widgets outside the main thread raises `RuntimeError` thanks to a custom `CheckedText` wrapper that asserts `threading.current_thread() is threading.main_thread()`.
+
 ## 5 Folder Structure
 ```
 xyppy-speech/
