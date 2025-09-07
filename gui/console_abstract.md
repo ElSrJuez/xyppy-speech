@@ -22,6 +22,16 @@ Provide a thin GUI wrapper around the existing **xyppy** CLI engine so that the 
 • Preserve keyboard shortcuts: ↑ / ↓ command history, Ctrl-L clear screen, etc.
 • Allow window resizing; panes adapt proportionally (Tk `grid` weights).
 
+### 3.1 Widget Inventory
+| Pane (grid pos) | Widget Class         | Purpose | Key Interactions |
+|-----------------|----------------------|---------|------------------|
+| **Transcript** (row=0, col=0) | `widgets.transcript.Transcript` (ScrolledText) | Stream of ANSI text coming from engine. Auto-scrolls unless user has scrolled up. | PgUp/PgDn scroll, Ctrl-L clear, search (future). |
+| **Input Buffer** (row=1, col=0) | `widgets.inputbox.InputBox` (Text height=4) | Line editing with history. Emits full command on ↵ to `InputQueue`. | ↑/↓ history, Tab autocomplete (future), Ctrl-C abort line. |
+| **State Explorer** (row=0, col=1) | `widgets.explorer.Explorer` (ttk.Treeview) | Shows player stats, inventory tree, current room items. Refreshed every turn via `state.helpers`. | Double-click inventory item -> quick “LOOK item”. |
+| **Speech Panel** (row=1, col=1) | `widgets.speech.SpeechPane` (Read-only Text) | Displays last N recognised voice phrases + engine replies (“Sorry, didn’t catch…”) | Click phrase -> re-enqueue it as text command. |
+
+The grid weights (`row0=3`, `row1=1`, `col0=3`, `col1=2`) keep the text area dominant while still exposing contextual info.
+
 ## 4 Architecture Overview
 ```
 ┌───────────────┐       stdout (ANSI)        ┌───────────────────┐
